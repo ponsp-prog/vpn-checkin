@@ -59,7 +59,7 @@ if is_admin:
 # --- 5. USER UI ---
 else:
     st.markdown('<p class="hero-title user-color">🌐 VPN Check-in</p>', unsafe_allow_html=True)
-    st.markdown('<p class="hero-subtitle">ระบบตรวจสอบเวลาเข้างานและสรุปผลรอบการประชุม</p>', unsafe_allow_html=True)
+    st.markdown('<p class="hero-subtitle">ระบบตรวจสอบเวลาเข้างานและสรุปผลรอบสัปดาห์</p>', unsafe_allow_html=True)
     
     try:
         conn = get_db_connection()
@@ -70,7 +70,7 @@ else:
             
             # --- 5.1 สรุปผลรายสัปดาห์ (เลือกย้อนหลังได้) ---
             with st.container(border=True):
-                st.write("**📊 สรุปภาพรวมรอบการประชุม (อังคาร - จันทร์)**")
+                st.write("**📊 สรุปภาพรวมรอบสัปดาห์ (อังคาร - จันทร์)**")
                 
                 # ตรรกะคำนวณหาวันจันทร์ล่าสุด
                 today = datetime.now().date()
@@ -84,7 +84,7 @@ else:
                     start_d = end_d - timedelta(days=6)
                     weeks.append(f"{start_d.strftime('%d/%m/%Y')} - {end_d.strftime('%d/%m/%Y')}")
                 
-                selected_week_label = st.selectbox("เลือกรอบการประชุมที่ต้องการดู:", weeks)
+                selected_week_label = st.selectbox("เลือกรอบสัปดาห์ที่ต้องการดู:", weeks)
                 
                 # แปลง Label กลับเป็นวันที่เพื่อ Query
                 idx = weeks.index(selected_week_label)
@@ -128,10 +128,10 @@ else:
                     col_m1, col_m2 = st.columns(2)
                     with col_m1:
                         with st.container(border=True):
-                            st.metric("👥 พนักงานทั้งหมด", f"{len(df_result)} คน")
+                            st.metric("👥 จำนวนพนักงานเข้าใช้งานทั้งหมด", f"{len(df_result)} คน")
                     with col_m2:
                         with st.container(border=True):
-                            st.metric("🌅 เข้างานคนแรก", df_result['Local_time'].min())
+                            st.metric("🌅 เวลาที่พนักงานเข้าใช้งานแรกสุด", df_result['Local_time'].min())
                     
                     with st.container(border=True):
                         st.write(f"**📋 รายชื่อพนักงาน ({sel_day:02d}/{sel_month:02d}/{sel_year})**")
@@ -149,6 +149,6 @@ else:
                     report_df['Date'] = pd.to_datetime(report_df['Date']).dt.strftime('%d/%m/%Y')
                     st.download_button("📥 ดาวน์โหลดไฟล์", report_df.to_csv(index=False).encode('utf-8-sig'), "VPN_Report.csv", "text/csv", use_container_width=True)
         else:
-            st.info("📢 ยินดีต้อนรับครับเจ้านาย! ขณะนี้ยังไม่มีข้อมูลในระบบ")
+            st.info("📢 ยินดีต้อนรับครับ! ขณะนี้ยังไม่มีข้อมูลในระบบ")
         conn.close()
     except Exception as e: st.error(f"⚠️ พบข้อผิดพลาด: {e}")
