@@ -10,42 +10,72 @@ from datetime import datetime, timedelta
 # ---------------------------------------------------------------------------
 st.set_page_config(page_title="VPN Analytics Portal", layout="wide")
 
+# ประกาศตัวแปรชื่อเดือนไว้ตรงนี้เพื่อให้ใช้ได้ทุกที่ในโปรแกรมครับคุณพล
+MONTHS_TH = [
+    '', 'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+    'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
+]
+
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;600;700&display=swap');
-    html, body, [class*="css"], .stText, .stMarkdown p, .stMetric label {
+    html, body, [class*="css"], .stApp {
         font-family: 'IBM Plex Sans Thai', sans-serif !important;
+        background-color: #FFFFFF !important;
+        color: #1E293B !important;
     }
-    .stApp { background-color: #F8FAFC; }
     .hero-title {
-        font-size: clamp(32px, 8vw, 64px) !important;
-        font-weight: 700 !important;
+        font-size: 52px !important;
+        font-weight: 800 !important;
         text-align: center;
+        background: linear-gradient(90deg, #FF00E6, #00C8FF);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
         margin-bottom: 5px;
     }
-    .user-color  { color: #1E40AF; }
-    .admin-color { color: #B91C1C; }
+    .user-color  { color: #00C8FF !important; font-weight: 700; }
+    .admin-color { color: #F61100 !important; font-weight: 700; }
     .hero-subtitle {
-        font-size: clamp(16px, 4vw, 22px) !important;
+        font-size: 18px !important;
         text-align: center;
         color: #64748B;
-        margin-bottom: 25px;
+        margin-bottom: 30px;
     }
     [data-testid="stVerticalBlockBorderWrapper"] {
-        background-color: white;
-        border-radius: 12px !important;
-        border: 1px solid #E2E8F0 !important;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
-        padding: 15px !important;
-        margin-bottom: 15px;
+        background-color: #FFFFFF !important;
+        border-radius: 20px !important;
+        border: 2px solid #4200EA !important;
+        box-shadow: 0 10px 25px -5px rgba(66, 0, 234, 0.15) !important;
+        padding: 25px !important;
+        margin-bottom: 25px;
     }
-    header { visibility: hidden; }
-    footer  { visibility: hidden; }
+    .stButton>button {
+        background: #4200EA !important;
+        color: #FFFFFF !important;
+        border: none !important;
+        border-radius: 12px !important;
+        height: 48px !important;
+        font-weight: 700 !important;
+        box-shadow: 0 4px 14px 0 rgba(66, 0, 234, 0.39) !important;
+        transition: 0.2s all ease;
+    }
+    .stButton>button:hover {
+        background: #FF00E6 !important;
+        transform: translateY(-2px);
+    }
+    [data-testid="stMetricValue"] {
+        background: linear-gradient(90deg, #FF00E6, #00C8FF);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: 800 !important;
+        font-size: 48px !important;
+    }
+    header, footer { visibility: hidden; }
     </style>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# 2. DATABASE
+# 2. DATABASE & PARSE FUNCTIONS
 # ---------------------------------------------------------------------------
 def get_db_connection():
     conn = sqlite3.connect('vpn_data.db')
@@ -61,84 +91,35 @@ def get_db_connection():
     conn.commit()
     return conn
 
-# ---------------------------------------------------------------------------
-# 3. PARSE FUNCTION
-#    รองรับ: HTML-based .xls (OpenVPN export) / binary .xls / .xlsx
-#    - concat ทุก <table> ในไฟล์เดียว
-#    - กรองเฉพาะ Event type = "User activity"
-#    - เก็บเฉพาะ Local time เช้าที่สุดของแต่ละคนต่อวัน
-# ---------------------------------------------------------------------------
 def parse_vpn_file(file_bytes: bytes) -> pd.DataFrame | None:
     df_raw = None
-    errors = []
-
-    # Strategy A — pd.read_html (HTML-based .xls)
     try:
         tables = pd.read_html(io.BytesIO(file_bytes), flavor="lxml")
-        if tables:
-            df_raw = pd.concat(tables, ignore_index=True)
-    except Exception as e:
-        errors.append(f"read_html (lxml): {e}")
-
-    # Strategy B — xlrd (binary .xls)
-    if df_raw is None:
-        try:
-            df_raw = pd.read_excel(io.BytesIO(file_bytes), engine="xlrd")
-        except Exception as e:
-            errors.append(f"xlrd: {e}")
-
-    # Strategy C — openpyxl (.xlsx)
-    if df_raw is None:
-        try:
-            df_raw = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
-        except Exception as e:
-            errors.append(f"openpyxl: {e}")
+        if tables: df_raw = pd.concat(tables, ignore_index=True)
+    except: pass
 
     if df_raw is None:
-        st.error("❌ ไม่สามารถอ่านไฟล์ได้:\n" + "\n".join(errors))
-        return None
+        try: df_raw = pd.read_excel(io.BytesIO(file_bytes), engine="xlrd")
+        except:
+            try: df_raw = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
+            except: return None
 
-    # Normalize column names
     df_raw.columns = [re.sub(r'\s+', ' ', str(c)).strip() for c in df_raw.columns]
+    
+    time_col = next((c for c in df_raw.columns if re.search(r'local\s*time', c, re.I)), None)
+    name_col = next((c for c in df_raw.columns if re.search(r'computer\s*name', c, re.I)), None)
+    event_col = next((c for c in df_raw.columns if re.search(r'event\s*type', c, re.I)), None)
 
-    def find_col(pattern: str) -> str | None:
-        for col in df_raw.columns:
-            if re.search(pattern, col, flags=re.IGNORECASE):
-                return col
-        return None
+    if not all([time_col, name_col, event_col]): return None
 
-    time_col  = find_col(r'local\s*time')
-    name_col  = find_col(r'computer\s*name')
-    event_col = find_col(r'event\s*type')
+    df_ua = df_raw[df_raw[event_col].astype(str).str.strip().str.lower() == "user activity"].copy()
+    if df_ua.empty: return None
 
-    missing = [lbl for lbl, col in [("Local time", time_col),
-                                     ("Computer name", name_col),
-                                     ("Event type", event_col)] if col is None]
-    if missing:
-        st.error(f"❌ หาคอลัมน์ไม่เจอ: **{', '.join(missing)}**\n\n"
-                 f"คอลัมน์ที่มีในไฟล์: `{', '.join(df_raw.columns.tolist())}`")
-        return None
-
-    # Filter: User activity only
-    df_ua = df_raw[
-        df_raw[event_col].astype(str).str.strip().str.lower() == "user activity"
-    ].copy()
-
-    if df_ua.empty:
-        st.warning("⚠️ ไม่พบแถวที่มี Event type = 'User activity' ในไฟล์นี้")
-        return None
-
-    # Parse datetime → keep earliest per person per day
     df_ua[time_col] = pd.to_datetime(df_ua[time_col], dayfirst=False, errors='coerce')
     df_ua = df_ua.dropna(subset=[time_col, name_col])
     df_ua['Date'] = df_ua[time_col].dt.date.astype(str)
 
-    df_first = (
-        df_ua
-        .sort_values(time_col)
-        .groupby([name_col, 'Date'], as_index=False)
-        .first()
-    )
+    df_first = df_ua.sort_values(time_col).groupby([name_col, 'Date'], as_index=False).first()
 
     return pd.DataFrame({
         'Computer_name': df_first[name_col].str.strip(),
@@ -150,26 +131,23 @@ def parse_vpn_file(file_bytes: bytes) -> pd.DataFrame | None:
 # ROUTING
 # ---------------------------------------------------------------------------
 is_admin = st.query_params.get("role") == "admin"
-
 # ---------------------------------------------------------------------------
-# 4. ADMIN UI
+# 4. ADMIN UI (ปรับเรียงลำดับ: อัปโหลดขึ้นก่อน แล้วค่อยตามด้วยส่วนจัดการลบ)
 # ---------------------------------------------------------------------------
 if is_admin:
     st.markdown('<p class="hero-title admin-color">🛠️ Admin Control</p>', unsafe_allow_html=True)
 
-    if st.button("🗑️ ล้างฐานข้อมูลทั้งหมด", use_container_width=True):
-        conn = get_db_connection()
-        conn.execute("DELETE FROM vpn_logs")
-        conn.commit()
-        conn.close()
-        st.success("ล้างข้อมูลเรียบร้อยแล้ว!")
+    if st.button("← กลับสู่หน้าหลัก", use_container_width=True):
+        st.query_params.clear()
         st.rerun()
 
+    # --- ส่วนที่ 1: การอัปโหลดข้อมูล (ย้ายขึ้นมาไว้อันแรก) ---
     with st.container(border=True):
         st.subheader("📤 อัปโหลดข้อมูลใหม่")
         uploaded_file = st.file_uploader(
             "เลือกไฟล์ OpenVPN Export (.xls, .xlsx)",
-            type=['xlsx', 'xls']
+            type=['xlsx', 'xls'],
+            key="upload_file"
         )
 
         if uploaded_file:
@@ -178,10 +156,10 @@ if is_admin:
                 df_to_db = parse_vpn_file(file_bytes)
 
             if df_to_db is not None and not df_to_db.empty:
-                st.write(f"**ตัวอย่างข้อมูล ({len(df_to_db)} รายการ):**")
+                st.write("**📋 ตัวอย่างข้อมูลที่จะบันทึก:**")
                 st.dataframe(df_to_db, use_container_width=True, hide_index=True)
 
-                if st.button("✅ ยืนยันบันทึกลงฐานข้อมูล", use_container_width=True):
+                if st.button("✅ ยืนยันบันทึกลงฐานข้อมูล", use_container_width=True, key="confirm_save"):
                     try:
                         conn = get_db_connection()
                         inserted = skipped = 0
@@ -190,32 +168,74 @@ if is_admin:
                                 "INSERT OR IGNORE INTO vpn_logs (Computer_name, Date, Local_time) VALUES (?, ?, ?)",
                                 (row['Computer_name'], row['Date'], row['Local_time'])
                             )
-                            if cur.rowcount:
-                                inserted += 1
-                            else:
-                                skipped += 1
+                            inserted += cur.rowcount
+                            skipped  += 1 - cur.rowcount
                         conn.commit()
                         conn.close()
                         st.success(f"✅ บันทึกสำเร็จ {inserted} รายการ | ข้ามซ้ำ {skipped} รายการ")
+                        st.balloons()
+                        st.rerun()
                     except Exception as e:
                         st.error(f"❌ พบข้อผิดพลาดขณะบันทึก: {e}")
 
-    if st.button("← กลับสู่หน้าหลัก", use_container_width=True):
-        st.query_params.clear()
-        st.rerun()
+    # --- ส่วนที่ 2: การลบข้อมูลแบบแยก วัน/เดือน/ปี (ย้ายมาไว้ด้านล่าง) ---
+    with st.container(border=True):
+        st.subheader("🗑️ จัดการและลบข้อมูลรายวัน")
+        
+        conn = get_db_connection()
+        df_exists = pd.read_sql("SELECT DISTINCT Date FROM vpn_logs", conn)
+        conn.close()
 
-# ---------------------------------------------------------------------------
-# 5. USER UI
-# ---------------------------------------------------------------------------
+        if not df_exists.empty:
+            df_exists['Date_dt'] = pd.to_datetime(df_exists['Date'])
+            
+            c1, c2, c3 = st.columns(3)
+            
+            # 1. เลือกปี
+            years = sorted(df_exists['Date_dt'].dt.year.unique(), reverse=True)
+            with c1:
+                sel_y = st.selectbox("เลือกปี", options=years, format_func=lambda y: f"พ.ศ. {y + 543}")
+            
+            # 2. เลือกเดือน
+            months = sorted(df_exists[df_exists['Date_dt'].dt.year == sel_y]['Date_dt'].dt.month.unique(), reverse=True)
+            with c2:
+                sel_m = st.selectbox("เลือกเดือน", options=months, format_func=lambda m: MONTHS_TH[m])
+            
+            # 3. เลือกวัน
+            days = sorted(df_exists[(df_exists['Date_dt'].dt.year == sel_y) & 
+                                    (df_exists['Date_dt'].dt.month == sel_m)]['Date_dt'].dt.day.unique(), reverse=True)
+            with c3:
+                sel_d = st.selectbox("เลือกวันที่", options=days)
+
+            target_del_date = f"{sel_y}-{sel_m:02d}-{sel_d:02d}"
+            display_date = f"{sel_d} {MONTHS_TH[sel_m]} {sel_y + 543}"
+
+            if st.button(f"❌ ยืนยันลบข้อมูลวันที่ {display_date}", use_container_width=True):
+                conn = get_db_connection()
+                conn.execute("DELETE FROM vpn_logs WHERE Date = ?", (target_del_date,))
+                conn.commit()
+                conn.close()
+                st.success(f"ลบข้อมูลวันที่ {display_date} เรียบร้อยแล้ว")
+                st.rerun()
+        else:
+            st.info("ยังไม่มีข้อมูลในระบบให้จัดการครับ")
+
+        st.divider()
+        
+        if st.button("⚠️ ล้างฐานข้อมูลทั้งหมด (ลบทุกอย่าง)", use_container_width=True):
+            conn = get_db_connection()
+            conn.execute("DELETE FROM vpn_logs")
+            conn.commit()
+            conn.close()
+            st.success("ล้างข้อมูลทั้งหมดเรียบร้อยแล้ว!")
+            st.rerun()
+
 else:
+    # ---------------------------------------------------------------------------
+    # 5. USER UI
+    # ---------------------------------------------------------------------------
     st.markdown('<p class="hero-title user-color">🌐 VPN Check-in</p>', unsafe_allow_html=True)
-    st.markdown('<p class="hero-subtitle">ระบบตรวจสอบเวลาเข้าใช้งาน VPN และสรุปผลการเข้าใช้งานรอบสัปดาห์</p>',
-                unsafe_allow_html=True)
-
-    MONTHS_TH = [
-        '', 'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
-        'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
-    ]
+    st.markdown('<p class="hero-subtitle">ระบบตรวจสอบเวลาเข้าใช้งาน VPN รายสัปดาห์</p>', unsafe_allow_html=True)
 
     try:
         conn = get_db_connection()
@@ -224,142 +244,58 @@ else:
         if not df_dates.empty:
             df_dates['Date_dt'] = pd.to_datetime(df_dates['Date'])
 
-            # -----------------------------------------------------------------
-            # 5.1 สรุปรอบการประชุม (อังคาร – จันทร์)
-            #     FIX: แสดงรอบปัจจุบัน (ที่กำลังเดิน) เป็น default เสมอ
-            # -----------------------------------------------------------------
+            # 5.1 สรุปสัปดาห์
             with st.container(border=True):
-                st.write("**📊 สรุปภาพรวมรอบสัปดาห์ (อังคาร – จันทร์)**")
-
+                st.write("**📊 สถานะการเข้าใช้งานรายสัปดาห์ ( อังคาร – จันทร์ )**")
                 today = datetime.now().date()
-                # หา Tuesday ที่เริ่มรอบปัจจุบัน
-                # weekday(): Mon=0, Tue=1, Wed=2, ..., Sun=6
                 days_since_tuesday = (today.weekday() - 1) % 7
                 current_week_start = today - timedelta(days=days_since_tuesday)
 
                 weeks = []
                 for i in range(4):
-                    start_d = current_week_start - timedelta(weeks=i)
-                    end_d   = start_d + timedelta(days=6)
-                    label   = f"{start_d.strftime('%d/%m/%Y')} - {end_d.strftime('%d/%m/%Y')}"
-                    if i == 0:
-                        label += "  (รอบปัจจุบัน)"
-                    weeks.append((label, start_d, end_d))
+                    s = current_week_start - timedelta(weeks=i)
+                    e = s + timedelta(days=6)
+                    weeks.append((f"{s.strftime('%d/%m/%Y')} - {e.strftime('%d/%m/%Y')}" + (" ( ปัจจุบัน )" if i==0 else ""), s, e))
 
-                selected_idx = st.selectbox(
-                    "เลือกรอบสัปดาห์ที่ต้องการดู:",
-                    options=range(len(weeks)),
-                    format_func=lambda i: weeks[i][0],
-                    index=0   # default = รอบปัจจุบันเสมอ
-                )
-                _, sel_start, sel_end = weeks[selected_idx]
+                sel_idx = st.selectbox("เลือกรอบสัปดาห์ :", options=range(len(weeks)), format_func=lambda i: weeks[i][0])
+                _, sw, ew = weeks[sel_idx]
 
-                df_meeting = pd.read_sql(
-                    "SELECT Computer_name, Date FROM vpn_logs WHERE Date BETWEEN ? AND ?",
-                    conn, params=[str(sel_start), str(sel_end)]
-                )
+                df_w = pd.read_sql("SELECT Computer_name, Date FROM vpn_logs WHERE Date BETWEEN ? AND ?", conn, params=[str(sw), str(ew)])
+                if not df_w.empty:
+                    dr = [sw + timedelta(days=d) for d in range(7)]
+                    df_w['Date_dt'] = pd.to_datetime(df_w['Date']).dt.date
+                    user_stats = []
+                    for u in df_w['Computer_name'].unique():
+                        ud = df_w[df_w['Computer_name'] == u]['Date_dt'].tolist()
+                        user_stats.append({'name': u, 'active': len(set(ud) & set(dr)), 'dates': ud})
+                    
+                    user_stats = sorted(user_stats, key=lambda x: x['active'], reverse=True)
+                    html = ""
+                    for u in user_stats:
+                        dots = "".join([f'<span style="color: {"#FF00E6" if d in u["dates"] else "#E2E8F0"}; font-size: 24px; margin-right: 8px;">●</span>' for d in dr])
+                        html += f"<tr><td style='padding:12px; border-bottom:1px solid #F1F5F9;'>{u['name']}</td><td style='padding:12px; border-bottom:1px solid #F1F5F9; text-align:center;'>{dots}</td><td style='padding:12px; border-bottom:1px solid #F1F5F9; font-weight:700; color:#4200EA;'>{u['active']} วัน</td></tr>"
+                    st.markdown(f'<table style="width:100%; border-collapse:collapse;"><thead><tr style="background-color:#F8FAFC;"><th style="text-align:left; padding:12px;">พนักงาน</th><th style="text-align:center; padding:12px;">ตารางเข้าใช้งาน</th><th style="text-align:left; padding:12px;">รวม</th></tr></thead><tbody>{html}</tbody></table>', unsafe_allow_html=True)
 
-                if not df_meeting.empty:
-                    summary_df = (
-                        df_meeting.groupby('Computer_name')
-                        .size()
-                        .reset_index(name='วันที่เข้าใช้งาน (วัน)')
-                        .sort_values('วันที่เข้าใช้งาน (วัน)', ascending=False)
-                    )
-                    st.data_editor(
-                        summary_df,
-                        column_config={"วันที่เข้าใช้งาน (วัน)": st.column_config.ProgressColumn(
-                            f"สถานะ {weeks[selected_idx][0].split('  ')[0]}",
-                            format="%d วัน", min_value=0, max_value=7
-                        )},
-                        use_container_width=True, hide_index=True, disabled=True
-                    )
-                else:
-                    st.info(f"ไม่พบข้อมูลในช่วง {weeks[selected_idx][0]}")
-
-            # -----------------------------------------------------------------
-            # 5.2 ตรวจสอบรายวัน
-            #     FIX: เลือก ปี → เดือน (ชื่อไทย) → วัน แยกกัน, ซ้ายไปขวา
-            # -----------------------------------------------------------------
+            # 5.2 รายวัน
             with st.container(border=True):
                 st.write("**📅 ตรวจสอบรายวัน**")
+                c_y, c_m, c_d = st.columns(3)
+                years = sorted(df_dates['Date_dt'].dt.year.unique(), reverse=True)
+                with c_y: sy = st.selectbox("ปี ", options=years, format_func=lambda y: str(y+543))
+                months = sorted(df_dates[df_dates['Date_dt'].dt.year == sy]['Date_dt'].dt.month.unique(), reverse=True)
+                with c_m: sm = st.selectbox("เดือน ", options=months, format_func=lambda m: MONTHS_TH[m])
+                days = sorted(df_dates[(df_dates['Date_dt'].dt.year == sy) & (df_dates['Date_dt'].dt.month == sm)]['Date_dt'].dt.day.unique(), reverse=True)
+                with c_d: sd = st.selectbox("วัน ", options=days)
 
-                c_year, c_month, c_day = st.columns([1, 1.4, 1])
-
-                years_avail = sorted(df_dates['Date_dt'].dt.year.unique(), reverse=True)
-                with c_year:
-                    sel_year = st.selectbox(
-                        "ปี",
-                        options=years_avail,
-                        format_func=lambda y: str(y + 543)
-                    )
-
-                months_avail = sorted(
-                    df_dates[df_dates['Date_dt'].dt.year == sel_year]['Date_dt'].dt.month.unique(),
-                    reverse=True
-                )
-                with c_month:
-                    sel_month = st.selectbox(
-                        "เดือน",
-                        options=months_avail,
-                        format_func=lambda m: MONTHS_TH[m]
-                    )
-
-                days_avail = sorted(
-                    df_dates[
-                        (df_dates['Date_dt'].dt.year  == sel_year) &
-                        (df_dates['Date_dt'].dt.month == sel_month)
-                    ]['Date_dt'].dt.day.unique(),
-                    reverse=True
-                )
-                with c_day:
-                    sel_day = st.selectbox("วัน", options=days_avail)
-
-                target_date = f"{sel_year}-{sel_month:02d}-{sel_day:02d}"
-                df_result = pd.read_sql(
-                    "SELECT Computer_name, Local_time FROM vpn_logs WHERE Date = ? ORDER BY Local_time ASC",
-                    conn, params=[target_date]
-                )
-
-                if not df_result.empty:
-                    col_m1, col_m2 = st.columns(2)
-                    with col_m1:
-                        st.metric("👥 จำนวนพนักงานทั้งหมดที่เข้าใช้งาน VPN", f"{len(df_result)} คน")
-                    with col_m2:
-                        st.metric("🌅 เวลาที่เข้าใช้งาน VPN แรกสุด", df_result['Local_time'].min())
-                    st.dataframe(df_result, use_container_width=True, hide_index=True)
-                else:
-                    st.info(f"ไม่พบข้อมูลในวันที่ {sel_day} {MONTHS_TH[sel_month]} {sel_year + 543}")
-
-            # -----------------------------------------------------------------
-            # 5.3 ส่งออกรายงาน CSV
-            # -----------------------------------------------------------------
-            with st.container(border=True):
-                st.write("**📥 ส่งออกรายงาน (.CSV)**")
-                all_dates_raw = sorted(df_dates['Date_dt'].dt.date.unique(), reverse=True)
-                date_options  = {d.strftime('%d/%m/%Y'): d.strftime('%Y-%m-%d') for d in all_dates_raw}
-                selected_labels = st.multiselect(
-                    "เลือกวันที่ต้องการรวมไฟล์:",
-                    options=list(date_options.keys())
-                )
-                if selected_labels:
-                    days_query = [date_options[lbl] for lbl in selected_labels]
-                    report_df  = pd.read_sql(
-                        f"SELECT * FROM vpn_logs WHERE Date IN ({','.join(['?']*len(days_query))})",
-                        conn, params=days_query
-                    )
-                    report_df['Date'] = pd.to_datetime(report_df['Date']).dt.strftime('%d/%m/%Y')
-                    st.download_button(
-                        "📥 ดาวน์โหลดไฟล์",
-                        report_df.to_csv(index=False).encode('utf-8-sig'),
-                        "VPN_Report.csv", "text/csv",
-                        use_container_width=True
-                    )
+                res = pd.read_sql("SELECT Computer_name, Local_time FROM vpn_logs WHERE Date = ? ORDER BY Local_time ASC", conn, params=[f"{sy}-{sm:02d}-{sd:02d}"])
+                if not res.empty:
+                    m1, m2 = st.columns(2)
+                    m1.metric("👥 จำนวนพนักงาน", f"{len(res)} คน")
+                    m2.metric("🌅 เวลาเข้าแรกสุด", res['Local_time'].min())
+                    st.dataframe(res, use_container_width=True, hide_index=True)
 
         else:
-            st.info("📢 ยินดีต้อนรับ! ขณะนี้ยังไม่มีข้อมูลในระบบ")
-
+            st.info("📢 ยินดีต้อนรับคุณพล! ขณะนี้ยังไม่มีข้อมูลในระบบครับ")
         conn.close()
-
     except Exception as e:
         st.error(f"⚠️ พบข้อผิดพลาด: {e}")
