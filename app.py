@@ -83,6 +83,7 @@ def get_db_connection():
         CREATE TABLE IF NOT EXISTS vpn_logs (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             Computer_name TEXT,
+            Account       TEXT,
             Date          TEXT,
             Local_time    TEXT,
             UNIQUE(Computer_name, Date)
@@ -108,6 +109,7 @@ def parse_vpn_file(file_bytes: bytes) -> pd.DataFrame | None:
     
     time_col = next((c for c in df_raw.columns if re.search(r'local\s*time', c, re.I)), None)
     name_col = next((c for c in df_raw.columns if re.search(r'computer\s*name', c, re.I)), None)
+    acc_col  = next((c for c in df_raw.columns if re.search(r'account', c, re.I)), None)
     event_col = next((c for c in df_raw.columns if re.search(r'event\s*type', c, re.I)), None)
 
     if not all([time_col, name_col, event_col]): return None
@@ -123,6 +125,7 @@ def parse_vpn_file(file_bytes: bytes) -> pd.DataFrame | None:
 
     return pd.DataFrame({
         'Computer_name': df_first[name_col].str.strip(),
+        'Account':       df_first[acc_col].str.strip() if acc_col else "-",
         'Date':          df_first['Date'],
         'Local_time':    df_first[time_col].dt.strftime('%H:%M:%S'),
     })
@@ -132,7 +135,7 @@ def parse_vpn_file(file_bytes: bytes) -> pd.DataFrame | None:
 # ---------------------------------------------------------------------------
 is_admin = st.query_params.get("role") == "admin"
 # ---------------------------------------------------------------------------
-# 4. ADMIN UI (ปรับเรียงลำดับ: อัปโหลดขึ้นก่อน แล้วค่อยตามด้วยส่วนจัดการลบ)
+# 4. ADMIN UI 
 # ---------------------------------------------------------------------------
 if is_admin:
     st.markdown('<p class="hero-title admin-color">🛠️ Admin Control</p>', unsafe_allow_html=True)
@@ -141,7 +144,7 @@ if is_admin:
         st.query_params.clear()
         st.rerun()
 
-    # --- ส่วนที่ 1: การอัปโหลดข้อมูล (ย้ายขึ้นมาไว้อันแรก) ---
+    # --- ส่วนที่ 1: การอัปโหลดข้อมูล ---
     with st.container(border=True):
         st.subheader("📤 อัปโหลดข้อมูลใหม่")
         uploaded_file = st.file_uploader(
@@ -165,8 +168,8 @@ if is_admin:
                         inserted = skipped = 0
                         for _, row in df_to_db.iterrows():
                             cur = conn.execute(
-                                "INSERT OR IGNORE INTO vpn_logs (Computer_name, Date, Local_time) VALUES (?, ?, ?)",
-                                (row['Computer_name'], row['Date'], row['Local_time'])
+                                "INSERT OR IGNORE INTO vpn_logs (Computer_name, Account, Date, Local_time) VALUES (?, ?, ?, ?)",
+                                (row['Computer_name'], row['Account'], row['Date'], row['Local_time'])
                             )
                             inserted += cur.rowcount
                             skipped  += 1 - cur.rowcount
@@ -178,7 +181,7 @@ if is_admin:
                     except Exception as e:
                         st.error(f"❌ พบข้อผิดพลาดขณะบันทึก: {e}")
 
-    # --- ส่วนที่ 2: การลบข้อมูลแบบแยก วัน/เดือน/ปี (ย้ายมาไว้ด้านล่าง) ---
+    # --- ส่วนที่ 2: การลบข้อมูลแบบแยก วัน/เดือน/ปี ---
     with st.container(border=True):
         st.subheader("🗑️ จัดการและลบข้อมูลรายวัน")
         
@@ -260,21 +263,22 @@ else:
                 sel_idx = st.selectbox("เลือกรอบสัปดาห์ :", options=range(len(weeks)), format_func=lambda i: weeks[i][0])
                 _, sw, ew = weeks[sel_idx]
 
-                df_w = pd.read_sql("SELECT Computer_name, Date FROM vpn_logs WHERE Date BETWEEN ? AND ?", conn, params=[str(sw), str(ew)])
+                df_w = pd.read_sql("SELECT Computer_name, Account, Date FROM vpn_logs WHERE Date BETWEEN ? AND ?", conn, params=[str(sw), str(ew)])
                 if not df_w.empty:
                     dr = [sw + timedelta(days=d) for d in range(7)]
                     df_w['Date_dt'] = pd.to_datetime(df_w['Date']).dt.date
                     user_stats = []
                     for u in df_w['Computer_name'].unique():
                         ud = df_w[df_w['Computer_name'] == u]['Date_dt'].tolist()
-                        user_stats.append({'name': u, 'active': len(set(ud) & set(dr)), 'dates': ud})
+                        acc = df_w[df_w['Computer_name'] == u]['Account'].iloc[0] if 'Account' in df_w.columns else "-"
+                        user_stats.append({'name': u, 'account': acc, 'active': len(set(ud) & set(dr)), 'dates': ud})
                     
                     user_stats = sorted(user_stats, key=lambda x: x['active'], reverse=True)
                     html = ""
                     for u in user_stats:
                         dots = "".join([f'<span style="color: {"#FF00E6" if d in u["dates"] else "#E2E8F0"}; font-size: 24px; margin-right: 8px;">●</span>' for d in dr])
-                        html += f"<tr><td style='padding:12px; border-bottom:1px solid #F1F5F9;'>{u['name']}</td><td style='padding:12px; border-bottom:1px solid #F1F5F9; text-align:center;'>{dots}</td><td style='padding:12px; border-bottom:1px solid #F1F5F9; font-weight:700; color:#4200EA;'>{u['active']} วัน</td></tr>"
-                    st.markdown(f'<table style="width:100%; border-collapse:collapse;"><thead><tr style="background-color:#F8FAFC;"><th style="text-align:left; padding:12px;">พนักงาน</th><th style="text-align:center; padding:12px;">ตารางเข้าใช้งาน</th><th style="text-align:left; padding:12px;">รวม</th></tr></thead><tbody>{html}</tbody></table>', unsafe_allow_html=True)
+                        html += f"<tr><td style='padding:12px; border-bottom:1px solid #F1F5F9;'>{u['name']}</td><td style='padding:12px; border-bottom:1px solid #F1F5F9;'>{u['account']}</td><td style='padding:12px; border-bottom:1px solid #F1F5F9; text-align:center;'>{dots}</td><td style='padding:12px; border-bottom:1px solid #F1F5F9; font-weight:700; color:#4200EA;'>{u['active']} วัน</td></tr>"
+                    st.markdown(f'<table style="width:100%; border-collapse:collapse;"><thead><tr style="background-color:#F8FAFC;"><th style="text-align:left; padding:12px;">พนักงาน (Computer)</th><th style="text-align:left; padding:12px;">Account</th><th style="text-align:center; padding:12px;">ตารางเข้าใช้งาน</th><th style="text-align:left; padding:12px;">รวม</th></tr></thead><tbody>{html}</tbody></table>', unsafe_allow_html=True)
 
             # 5.2 รายวัน
             with st.container(border=True):
@@ -287,7 +291,7 @@ else:
                 days = sorted(df_dates[(df_dates['Date_dt'].dt.year == sy) & (df_dates['Date_dt'].dt.month == sm)]['Date_dt'].dt.day.unique(), reverse=True)
                 with c_d: sd = st.selectbox("วัน ", options=days)
 
-                res = pd.read_sql("SELECT Computer_name, Local_time FROM vpn_logs WHERE Date = ? ORDER BY Local_time ASC", conn, params=[f"{sy}-{sm:02d}-{sd:02d}"])
+                res = pd.read_sql("SELECT Computer_name, Account, Local_time FROM vpn_logs WHERE Date = ? ORDER BY Local_time ASC", conn, params=[f"{sy}-{sm:02d}-{sd:02d}"])
                 if not res.empty:
                     m1, m2 = st.columns(2)
                     m1.metric("👥 จำนวนพนักงาน", f"{len(res)} คน")
